@@ -43,6 +43,7 @@ class CameraViewModel(
 
     fun stopCamera() = viewModelScope.launch { controller.stop() }
 
+    fun switchCamera() = viewModelScope.launch { controller.switchCamera() }
     fun capture() = viewModelScope.launch {
         _ui.value = _ui.value.copy(isCapturing = true)
         try {

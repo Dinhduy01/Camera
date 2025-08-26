@@ -15,6 +15,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -49,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -60,6 +63,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.duy.nguyen.camera.controller.Camera2Controller
 import com.duy.nguyen.camera.model.CameraViewModel
 import com.duy.nguyen.camera.model.CameraViewModel.Aspect
+import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
     private val vm: CameraViewModel by viewModels {
@@ -115,38 +119,48 @@ fun CameraScreen(vm: CameraViewModel, onBack: () -> Unit) {
         label = "aspectAnim"
     )
 
+    val topOffsetTarget = when (ui.aspect) {
+        Aspect.RATIO_16_9 -> 35.dp
+        Aspect.RATIO_3_4  -> 150.dp
+        Aspect.RATIO_1_1  -> 0.dp
+    }
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // Preview area (giữ đúng tỉ lệ, có animation khi đổi)
         Box(
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(aspectAnim)
-                .align(Alignment.Center)
+                .align(
+                    if (ui.aspect == Aspect.RATIO_1_1) Alignment.Center
+                    else Alignment.TopCenter
+                )
+                .offset(y = topOffsetTarget)
+                .pointerInput(Unit) {
+                    var acc = 0f
+                    val threshold = 120f
+                    val cooldownMs = 350L
+                    var lastFlip = 0L
+
+                    detectVerticalDragGestures(
+                        onDragStart = { acc = 0f },
+                        onVerticalDrag = { change, dy ->
+                            acc += dy
+                            change.consume()
+                        },
+                        onDragEnd = {
+                            val now = System.currentTimeMillis()
+                            if (abs(acc) > threshold && now - lastFlip > cooldownMs) {
+                                lastFlip = now
+                                vm.switchCamera()
+                            }
+                        }
+                    )
+                }
         ) {
             CameraPreviewLayer(vm)
-        }
-
-        // Top bar
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-                .align(Alignment.TopCenter),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "Camera",
-                style = MaterialTheme.typography.titleLarge,
-                color = Color.White,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
-            }
         }
 
         // Bottom controls
@@ -162,7 +176,8 @@ fun CameraScreen(vm: CameraViewModel, onBack: () -> Unit) {
             CaptureRow(
                 flashEnabled = ui.flashEnabled,
                 onToggleFlash = vm::toggleFlash,
-                onCapture = vm::capture
+                onCapture = vm::capture,
+                onFlip = vm::switchCamera
             )
         }
 
@@ -238,6 +253,7 @@ private fun CaptureRow(
     flashEnabled: Boolean,
     onToggleFlash: () -> Unit,
     onCapture: () -> Unit,
+    onFlip: () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth(),
@@ -248,9 +264,10 @@ private fun CaptureRow(
         Spacer(Modifier.width(28.dp))
         CaptureButton(onCapture)
         Spacer(Modifier.width(28.dp))
-        AssistButton(text = "Mode", onClick = { })
+        AssistButton(text = "Flip", onClick = onFlip)
     }
 }
+
 
 @Composable
 private fun AssistButton(text: String, onClick: () -> Unit) {

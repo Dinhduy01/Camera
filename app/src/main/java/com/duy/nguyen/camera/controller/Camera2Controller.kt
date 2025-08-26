@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class Camera2Controller(
     private val context: Context,
@@ -32,6 +33,9 @@ class Camera2Controller(
 ) {
     private val cameraOpenCloseLock = Semaphore(1)
     private var cameraId: String? = null
+
+    private val isSwitching = AtomicBoolean(false)
+    private var currentFacing: Int = CameraCharacteristics.LENS_FACING_BACK
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var previewRequestBuilder: CaptureRequest.Builder? = null
@@ -94,7 +98,7 @@ class Camera2Controller(
 
         startBackgroundThread()
 
-        chooseBackCameraIfNeeded()
+        chooseCamera()
         val id = cameraId ?: return@withContext onReady(false)
 
         if (!cameraOpenCloseLock.tryAcquire(
@@ -220,6 +224,37 @@ class Camera2Controller(
         imageReader = null
     }
 
+    suspend fun switchCamera() = withContext(Dispatchers.Default) {
+        if (!isSwitching.compareAndSet(false, true)) return@withContext
+
+        try {
+            try {
+                captureSession?.stopRepeating()
+            } catch (_: Throwable) {
+            }
+            try {
+                captureSession?.close()
+            } catch (_: Throwable) {
+            }
+            captureSession = null
+            try {
+                cameraDevice?.close()
+            } catch (_: Throwable) {
+            }
+            cameraDevice = null
+            imageReader?.close(); imageReader = null
+
+            currentFacing = if (currentFacing == CameraCharacteristics.LENS_FACING_BACK)
+                CameraCharacteristics.LENS_FACING_FRONT
+            else
+                CameraCharacteristics.LENS_FACING_BACK
+
+            startPreview { /* ignore */ }
+        } finally {
+            isSwitching.set(false)
+        }
+    }
+
     suspend fun resume(): Unit = withContext(Dispatchers.Default) {
         startPreview { /* ignore */ }
     }
@@ -244,7 +279,7 @@ class Camera2Controller(
         previewRequestBuilder?.apply {
             set(
                 CaptureRequest.FLASH_MODE,
-                if (flashOn) CaptureRequest.FLASH_MODE_SINGLE else CaptureRequest.FLASH_MODE_OFF
+                if (flashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
             )
             try {
                 captureSession?.setRepeatingRequest(build(), null, backgroundHandler)
@@ -273,9 +308,9 @@ class Camera2Controller(
 
 
     private fun pickSizeFor(aspect: CameraViewModel.Aspect): Size = when (aspect) {
-        CameraViewModel.Aspect.RATIO_16_9 -> Size(1280, 720)    // 16:9
-        CameraViewModel.Aspect.RATIO_3_4 -> Size(1440, 1080)   // 4:3
-        CameraViewModel.Aspect.RATIO_1_1 -> Size(1080, 1080)   // 1:1
+        CameraViewModel.Aspect.RATIO_16_9 -> Size(4000, 2252)    // 16:9
+        CameraViewModel.Aspect.RATIO_3_4 -> Size(4000, 3000)   // 4:3
+        CameraViewModel.Aspect.RATIO_1_1 -> Size(2292, 2292)   // 1:1
     }
 
 
@@ -296,7 +331,7 @@ class Camera2Controller(
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
             }
             session.stopRepeating()
-            session.capture(captureBuilder.build(), null, backgroundHandler)
+            session.captureBurst(listOf(captureBuilder.build()), null, backgroundHandler)
             // resume preview
             previewRequestBuilder?.build()
                 ?.let { session.setRepeatingRequest(it, null, backgroundHandler) }
@@ -346,17 +381,17 @@ class Camera2Controller(
         backgroundHandler = null
     }
 
-    private fun chooseBackCameraIfNeeded() {
-        if (cameraId != null) return
+    private fun chooseCamera() {
         for (id in cameraManager.cameraIdList) {
             val chars = cameraManager.getCameraCharacteristics(id)
             val facing = chars.get(CameraCharacteristics.LENS_FACING)
-            if (facing == CameraCharacteristics.LENS_FACING_BACK) {
+            if (facing == currentFacing) {
                 cameraId = id
                 return
             }
         }
-        // fallback
-        cameraId = cameraManager.cameraIdList.firstOrNull()
+        // fallback nếu không tìm được facing mong muốn
+        cameraId = cameraManager.cameraIdList.first()
     }
+
 }
