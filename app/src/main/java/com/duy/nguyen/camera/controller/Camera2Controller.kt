@@ -30,6 +30,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -341,7 +342,8 @@ class Camera2Controller(
         val pSurface =
             previewSurface ?: throw IllegalStateException("Preview surface chưa sẵn sàng")
 
-        val uri = createVideoUri(context, fileName())
+        val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val uri = createVideoUri(context, "VID_$ts")
             ?: throw IllegalStateException("Không tạo được URI video")
         recordingUri = uri
         val pfd = context.contentResolver.openFileDescriptor(uri, "w")
@@ -474,6 +476,4 @@ class Camera2Controller(
         }
         cameraId = cameraManager.cameraIdList.first()
     }
-
-    private fun fileName(): String = "VID_" + SimpleDateFormat("yyyyMMdd_HHmmss").format(Date())
 }
