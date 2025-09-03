@@ -12,7 +12,12 @@ data class CameraUiState(
     val flashEnabled: Boolean = false,
     val isCapturing: Boolean = false,
     val isPreviewReady: Boolean = false,
-)
+
+    val mode: Mode = Mode.PHOTO,
+    val isRecording: Boolean = false,
+) {
+    enum class Mode { PHOTO, VIDEO }
+}
 
 class CameraViewModel(
     private val controller: Camera2Controller
@@ -32,6 +37,14 @@ class CameraViewModel(
         viewModelScope.launch { controller.setFlash(next) }
     }
 
+    fun setMode(mode: CameraUiState.Mode) {
+        if (_ui.value.mode == mode) return
+        _ui.value = _ui.value.copy(mode = mode)
+        pauseCamera()
+        controller.isRecord = mode == CameraUiState.Mode.VIDEO
+        resumeCamera()
+    }
+
     fun startPreviewIfNeeded() = viewModelScope.launch {
         controller.startPreview(onReady = { ready ->
             _ui.value = _ui.value.copy(isPreviewReady = ready)
@@ -40,11 +53,11 @@ class CameraViewModel(
 
     fun pauseCamera() = viewModelScope.launch { controller.pause() }
     fun resumeCamera() = viewModelScope.launch { controller.resume() }
-
     fun stopCamera() = viewModelScope.launch { controller.stop() }
-
     fun switchCamera() = viewModelScope.launch { controller.switchCamera() }
+
     fun capture() = viewModelScope.launch {
+        if (_ui.value.mode != CameraUiState.Mode.PHOTO) return@launch
         _ui.value = _ui.value.copy(isCapturing = true)
         try {
             controller.captureStill()
@@ -53,9 +66,18 @@ class CameraViewModel(
         }
     }
 
+    fun toggleRecord() = viewModelScope.launch {
+        if (_ui.value.mode != CameraUiState.Mode.VIDEO) return@launch
+        if (_ui.value.isRecording) {
+            controller.stopRecording()
+            _ui.value = _ui.value.copy(isRecording = false)
+        } else {
+            controller.startRecording()
+            _ui.value = _ui.value.copy(isRecording = true)
+        }
+    }
+
     enum class Aspect(val w: Int, val h: Int, val label: String) {
-        RATIO_16_9(16, 9, "16:9"),
-        RATIO_3_4(3, 4, "3:4"),
-        RATIO_1_1(1, 1, "1:1");
+        RATIO_16_9(16, 9, "16:9"), RATIO_3_4(3, 4, "3:4"), RATIO_1_1(1, 1, "1:1");
     }
 }

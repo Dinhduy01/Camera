@@ -1,6 +1,5 @@
 package com.duy.nguyen.camera
 
-
 import android.hardware.camera2.CameraManager
 import android.os.Bundle
 import android.view.TextureView
@@ -8,13 +7,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,22 +28,18 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,16 +47,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import com.duy.nguyen.camera.controller.Camera2Controller
-import com.duy.nguyen.camera.model.CameraViewModel
 import com.duy.nguyen.camera.model.CameraViewModel.Aspect
+import com.duy.nguyen.camera.controller.Camera2Controller
+import com.duy.nguyen.camera.model.CameraUiState
+import com.duy.nguyen.camera.model.CameraViewModel
 import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
@@ -71,8 +63,7 @@ class MainActivity : ComponentActivity() {
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                val controller =
-                    com.duy.nguyen.camera.controller.Camera2Controller(this@MainActivity, cm)
+                val controller = Camera2Controller(this@MainActivity, cm)
                 return CameraViewModel(controller) as T
             }
         }
@@ -81,32 +72,24 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            CameraScreen(vm = vm, onBack = { finish() })
-            LifecycleHook(vm)
+            CameraScreen(vm = vm)
+            LaunchedEffect(Unit) { vm.startPreviewIfNeeded() }
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        vm.pauseCamera()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        vm.resumeCamera()
     }
 }
 
 @Composable
-private fun LifecycleHook(vm: CameraViewModel) {
-    val owner = LocalLifecycleOwner.current
-    DisposableEffect(owner) {
-        val obs = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> vm.resumeCamera()
-                Lifecycle.Event.ON_PAUSE -> vm.pauseCamera()
-                Lifecycle.Event.ON_STOP -> vm.stopCamera()
-                else -> Unit
-            }
-        }
-        owner.lifecycle.addObserver(obs)
-        onDispose { owner.lifecycle.removeObserver(obs) }
-    }
-    LaunchedEffect(Unit) { vm.startPreviewIfNeeded() }
-}
-
-@Composable
-fun CameraScreen(vm: CameraViewModel, onBack: () -> Unit) {
+fun CameraScreen(vm: CameraViewModel) {
     val ui by vm.ui.collectAsState()
 
     val aspectAnim by animateFloatAsState(
@@ -121,9 +104,10 @@ fun CameraScreen(vm: CameraViewModel, onBack: () -> Unit) {
 
     val topOffsetTarget = when (ui.aspect) {
         Aspect.RATIO_16_9 -> 35.dp
-        Aspect.RATIO_3_4  -> 150.dp
-        Aspect.RATIO_1_1  -> 0.dp
+        Aspect.RATIO_3_4 -> 150.dp
+        Aspect.RATIO_1_1 -> 0.dp
     }
+
     Box(
         Modifier
             .fillMaxSize()
@@ -133,74 +117,89 @@ fun CameraScreen(vm: CameraViewModel, onBack: () -> Unit) {
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(aspectAnim)
-                .align(
-                    if (ui.aspect == Aspect.RATIO_1_1) Alignment.Center
-                    else Alignment.TopCenter
-                )
+                .align(if (ui.aspect == Aspect.RATIO_1_1) Alignment.Center else Alignment.TopCenter)
                 .offset(y = topOffsetTarget)
-                .pointerInput(Unit) {
-                    var acc = 0f
+                .then(if (!ui.isRecording) Modifier.pointerInput(Unit) {
+                    var accV = 0f
                     val threshold = 120f
                     val cooldownMs = 350L
                     var lastFlip = 0L
-
                     detectVerticalDragGestures(
-                        onDragStart = { acc = 0f },
-                        onVerticalDrag = { change, dy ->
-                            acc += dy
-                            change.consume()
-                        },
+                        onDragStart = { accV = 0f },
+                        onVerticalDrag = { change, dy -> accV += dy; change.consume() },
                         onDragEnd = {
                             val now = System.currentTimeMillis()
-                            if (abs(acc) > threshold && now - lastFlip > cooldownMs) {
-                                lastFlip = now
-                                vm.switchCamera()
+                            if (abs(accV) > threshold && now - lastFlip > cooldownMs) {
+                                lastFlip = now; vm.switchCamera()
                             }
-                        }
-                    )
+                        })
+                } else Modifier)
+                .then(if (!ui.isRecording) Modifier.pointerInput(ui.mode) {
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, dx ->
+                            change.consume()
+                            if (dx > 0) vm.setMode(CameraUiState.Mode.PHOTO)
+                            else if (dx < 0) vm.setMode(CameraUiState.Mode.VIDEO)
+                        })
+                } else Modifier)) { CameraPreviewLayer(vm) }
+
+        if (!ui.isRecording) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 16.dp), horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                AspectSelector(current = ui.aspect, onSelect = vm::setAspect)
+                Spacer(Modifier.height(10.dp))
+
+                LazyRow(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    items(listOf(CameraUiState.Mode.PHOTO, CameraUiState.Mode.VIDEO)) { m ->
+                        val selected = (m == ui.mode)
+                        AssistChip(
+                            onClick = { vm.setMode(m) },
+                            label = { Text(if (m == CameraUiState.Mode.PHOTO) "Photo" else "Video") },
+                            modifier = Modifier.padding(horizontal = 6.dp),
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = if (selected) MaterialTheme.colorScheme.primary.copy(
+                                    alpha = 0.15f
+                                )
+                                else MaterialTheme.colorScheme.surface
+                            )
+                        )
+                    }
                 }
-        ) {
-            CameraPreviewLayer(vm)
-        }
 
-        // Bottom controls
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 16.dp), horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            AspectSelector(current = ui.aspect, onSelect = vm::setAspect)
-            Spacer(Modifier.height(12.dp))
-            CaptureRow(
-                flashEnabled = ui.flashEnabled,
-                onToggleFlash = vm::toggleFlash,
-                onCapture = vm::capture,
-                onFlip = vm::switchCamera
-            )
-        }
-
-        // shutter flash overlay (trắng, fade-out nhanh)
-        var flashTrigger by remember { mutableStateOf(0) }
-        LaunchedEffect(ui.isCapturing) {
-            if (ui.isCapturing) flashTrigger++
-        }
-        if (ui.isCapturing) {
-            var alpha by remember(flashTrigger) { mutableStateOf(0.35f) }
-            LaunchedEffect(flashTrigger) {
-                animate(
-                    initialValue = 0.35f,
-                    targetValue = 0f,
-                    animationSpec = tween(120, easing = LinearEasing)
-                ) { value, _ -> alpha = value }
+                Spacer(Modifier.height(10.dp))
+                CaptureRow(
+                    ui = ui,
+                    onToggleFlash = vm::toggleFlash,
+                    onCapture = vm::capture,
+                    onToggleRecord = vm::toggleRecord,
+                    onFlip = vm::switchCamera
+                )
             }
+        } else {
             Box(
                 Modifier
-                    .fillMaxSize()
-                    .background(Color.White.copy(alpha = alpha))
-            )
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 24.dp), contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(76.dp)
+                        .clip(CircleShape)
+                        .background(Color.Red)
+                        .clickable { vm.toggleRecord() })
+            }
         }
+
     }
 }
 
@@ -212,18 +211,13 @@ private fun CameraPreviewLayer(vm: CameraViewModel) {
     val controller = controllerField.get(vm) as Camera2Controller
 
     AndroidView(
-        factory = { _ ->
-            TextureView(ctx).also { tv ->
-                controller.attachPreview(tv)
-            }
-        }, modifier = Modifier.fillMaxSize()
+        factory = { TextureView(ctx).also { controller.attachPreview(it) } },
+        modifier = Modifier.fillMaxSize()
     )
 }
 
 @Composable
-private fun AspectSelector(
-    current: Aspect, onSelect: (Aspect) -> Unit
-) {
+private fun AspectSelector(current: Aspect, onSelect: (Aspect) -> Unit) {
     Row(
         Modifier
             .padding(horizontal = 20.dp)
@@ -232,9 +226,7 @@ private fun AspectSelector(
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        listOf(
-            Aspect.RATIO_16_9, Aspect.RATIO_3_4, Aspect.RATIO_1_1
-        ).forEach { asp ->
+        listOf(Aspect.RATIO_16_9, Aspect.RATIO_3_4, Aspect.RATIO_1_1).forEach { asp ->
             val selected = asp == current
             val scale by animateFloatAsState(if (selected) 1.0f else 0.94f, tween(180), label = "")
             Text(
@@ -242,7 +234,7 @@ private fun AspectSelector(
                 color = if (selected) Color.White else Color(0xFFBDBDBD),
                 modifier = Modifier
                     .padding(horizontal = 10.dp, vertical = 6.dp)
-                    .graphicsLayer { this.scaleX = scale; this.scaleY = scale }
+                    .graphicsLayer { scaleX = scale; scaleY = scale }
                     .clickable { onSelect(asp) })
         }
     }
@@ -250,9 +242,10 @@ private fun AspectSelector(
 
 @Composable
 private fun CaptureRow(
-    flashEnabled: Boolean,
+    ui: CameraUiState,
     onToggleFlash: () -> Unit,
     onCapture: () -> Unit,
+    onToggleRecord: () -> Unit,
     onFlip: () -> Unit,
 ) {
     Row(
@@ -260,14 +253,20 @@ private fun CaptureRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
-        AssistButton(text = if (flashEnabled) "Flash On" else "Flash Off", onClick = onToggleFlash)
+        AssistButton(
+            text = if (ui.flashEnabled) "Flash On" else "Flash Off", onClick = onToggleFlash
+        )
         Spacer(Modifier.width(28.dp))
-        CaptureButton(onCapture)
+        ModeAwareCaptureButton(
+            mode = ui.mode,
+            isRecording = ui.isRecording,
+            onCapture = onCapture,
+            onToggleRecord = onToggleRecord
+        )
         Spacer(Modifier.width(28.dp))
         AssistButton(text = "Flip", onClick = onFlip)
     }
 }
-
 
 @Composable
 private fun AssistButton(text: String, onClick: () -> Unit) {
@@ -282,35 +281,43 @@ private fun AssistButton(text: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun CaptureButton(onCapture: () -> Unit) {
-    var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.88f else 1f, animationSpec = spring(), label = "btnScale"
-    )
+private fun ModeAwareCaptureButton(
+    mode: CameraUiState.Mode,
+    isRecording: Boolean,
+    onCapture: () -> Unit,
+    onToggleRecord: () -> Unit
+) {
+    val size = 76.dp
+    val stroke = 5.dp
 
-    Box(
-        Modifier
-            .size(78.dp)
-            .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(CircleShape)
-            .background(Color.White)
-            .clickable {
-                pressed = true
-                onCapture()
-            }, contentAlignment = Alignment.Center
-    ) {
-        Box(
-            Modifier
-                .size(68.dp)
-                .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.06f))
-        )
-    }
+    when (mode) {
+        CameraUiState.Mode.PHOTO -> {
+            Box(
+                modifier = Modifier
+                    .size(size)
+                    .clip(CircleShape)
+                    .background(Color.White)
+                    .border(stroke, Color(0x33000000), CircleShape)
+                    .clickable { onCapture() })
+        }
 
-    LaunchedEffect(pressed) {
-        if (pressed) {
-            kotlinx.coroutines.delay(120)
-            pressed = false
+        CameraUiState.Mode.VIDEO -> {
+            if (isRecording) {
+                Box(
+                    modifier = Modifier
+                        .size(size)
+                        .clip(CircleShape)
+                        .background(Color.Red)
+                        .clickable { onToggleRecord() })
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(size)
+                        .clip(CircleShape)
+                        .background(Color.Red)
+                        .border(stroke, Color.White, CircleShape)
+                        .clickable { onToggleRecord() })
+            }
         }
     }
 }
