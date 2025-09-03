@@ -23,6 +23,7 @@ import android.view.WindowManager
 import com.duy.nguyen.camera.model.CameraViewModel
 import com.duy.nguyen.camera.util.createVideoUri
 import com.duy.nguyen.camera.util.saveJpegToAppDir
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
@@ -52,13 +53,15 @@ class Camera2Controller(
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
     private var flashOn: Boolean = false
-    private var currentAspect: CameraViewModel.Aspect = CameraViewModel.Aspect.RATIO_3_4
+    var currentAspectPhoto: CameraViewModel.Aspect = CameraViewModel.Aspect.RATIO_3_4
+    var currentAspectVideo: CameraViewModel.Aspect = CameraViewModel.Aspect.RATIO_16_9
     private var previewSize: Size = Size(4000, 3000)
     private var mediaRecorder: MediaRecorder? = null
     private var recorderSurface: Surface? = null
     var isRecord = false
     private var recordingUri: Uri? = null
 
+    @OptIn(DelicateCoroutinesApi::class)
     fun attachPreview(view: TextureView) {
         textureView = view
         textureView?.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -132,13 +135,17 @@ class Camera2Controller(
         val device = cameraDevice ?: return onReady(false)
         val surfaceTexture = textureView?.surfaceTexture ?: return onReady(false)
 
-        previewSize = pickSizeFor(currentAspect, isRecord)
+        previewSize = if (isRecord) {
+            pickSizeFor(currentAspectVideo, true)
+        } else {
+            pickSizeFor(currentAspectPhoto, false)
+        }
         surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
         val surface = Surface(surfaceTexture)
         previewSurface = surface
 
         imageReader?.close()
-        Log.e("duy.nguyen2", "createPreviewSession: $previewSize")
+        Log.e("duy.nguyen2", "imageReader: $previewSize")
         imageReader = ImageReader.newInstance(
             previewSize.width, previewSize.height, ImageFormat.JPEG, 1
         ).apply {
@@ -156,16 +163,15 @@ class Camera2Controller(
             previewRequestBuilder =
                 device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                     addTarget(surface)
-                    set(
-                        CaptureRequest.CONTROL_AF_MODE,
-                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                    )
+                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                     set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+
                     set(
                         CaptureRequest.FLASH_MODE,
-                        if (flashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
+                        if (isRecord && flashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
                     )
                 }
+
 
             val surfaces = listOf(surface, imageReader!!.surface)
             device.createCaptureSession(
@@ -231,7 +237,11 @@ class Camera2Controller(
             currentFacing =
                 if (currentFacing == CameraCharacteristics.LENS_FACING_BACK) CameraCharacteristics.LENS_FACING_FRONT
                 else CameraCharacteristics.LENS_FACING_BACK
-            previewSize = pickSizeFor(currentAspect, isRecord)
+            previewSize = if (isRecord) {
+                pickSizeFor(currentAspectVideo, true)
+            } else {
+                pickSizeFor(currentAspectPhoto, false)
+            }
             Log.e("duy.nguyen2", "switchCamera: $previewSize")
             startPreview { }
         } finally {
@@ -263,17 +273,19 @@ class Camera2Controller(
         previewRequestBuilder?.apply {
             set(
                 CaptureRequest.FLASH_MODE,
-                if (flashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
+                if (isRecord && flashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
             )
-            try {
-                captureSession?.setRepeatingRequest(build(), null, backgroundHandler)
-            } catch (_: Throwable) {
-            }
+            try { captureSession?.setRepeatingRequest(build(), null, backgroundHandler) } catch (_: Throwable) {}
         }
     }
 
+
     suspend fun onAspectChanged(aspect: CameraViewModel.Aspect) = withContext(Dispatchers.Default) {
-        currentAspect = aspect
+        if (isRecord) {
+            currentAspectVideo = aspect
+        } else {
+            currentAspectPhoto = aspect
+        }
         previewSize = pickSizeFor(aspect, isRecord)
         Log.e("duy.nguyen2", "onAspectChanged: $previewSize")
         try {
@@ -294,24 +306,23 @@ class Camera2Controller(
         aspect: CameraViewModel.Aspect, forVideo: Boolean = false
     ): Size {
         return if (!forVideo) {
-            if (currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
-                when (aspect) {
-                    CameraViewModel.Aspect.RATIO_16_9 -> Size(4000, 2252)
-                    CameraViewModel.Aspect.RATIO_3_4 -> Size(4000, 3000)
-                    CameraViewModel.Aspect.RATIO_1_1 -> Size(2292, 2292)
+            when (aspect) {
+                CameraViewModel.Aspect.RATIO_16_9 -> Size(4000, 2252)
+                CameraViewModel.Aspect.RATIO_3_4 -> Size(4000, 3000)
+                CameraViewModel.Aspect.RATIO_1_1 -> {
+                    return if (currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                        Size(2992, 2992)
+                    } else {
+                        Size(1088, 1088)
+                    }
                 }
-            } else {
-                when (aspect) {
-                    CameraViewModel.Aspect.RATIO_16_9 -> Size(3392, 1908)
-                    CameraViewModel.Aspect.RATIO_3_4 -> Size(3392, 2544)
-                    CameraViewModel.Aspect.RATIO_1_1 -> Size(2554, 2554)
-                }
+
             }
         } else {
             when (aspect) {
                 CameraViewModel.Aspect.RATIO_16_9 -> Size(1920, 1080)
-                CameraViewModel.Aspect.RATIO_3_4 -> Size(1440, 1080)
-                CameraViewModel.Aspect.RATIO_1_1 -> Size(1080, 1080)
+                CameraViewModel.Aspect.RATIO_1_1 -> Size(2992, 2992)
+                CameraViewModel.Aspect.RATIO_3_4 -> Size(0, 0)
             }
         }
     }
@@ -324,18 +335,26 @@ class Camera2Controller(
             val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(jpegSurface)
                 set(CaptureRequest.JPEG_ORIENTATION, orientationDegrees())
-                set(
-                    CaptureRequest.CONTROL_AF_MODE,
-                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                )
-                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+
+                if (flashOn) {
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                } else {
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                }
             }
+            Log.e("duy.nguyen2", "captureStill: "+flashOn )
             session.captureBurst(listOf<CaptureRequest>(builder.build()), null, backgroundHandler)
             previewRequestBuilder?.build()
                 ?.let { session.setRepeatingRequest(it, null, backgroundHandler) }
         } catch (_: Throwable) {
         }
     }
+
+    fun isFrontCamera(): Boolean =
+        currentFacing == CameraCharacteristics.LENS_FACING_FRONT
 
     suspend fun startRecording() = withContext(Dispatchers.Default) {
         val device = cameraDevice ?: throw IllegalStateException("Camera chưa mở")
@@ -358,7 +377,8 @@ class Camera2Controller(
             setVideoEncodingBitRate(10_000_000)
             setVideoFrameRate(30)
             setOrientationHint(orientationDegrees())
-            val videoSize = pickSizeFor(currentAspect, forVideo = true)
+            val videoSize = pickSizeFor(currentAspectVideo, forVideo = true)
+            Log.e("duy.nguyen2", "startRecording: " + videoSize)
             setVideoSize(videoSize.width, videoSize.height)
             prepare()
         }
@@ -471,9 +491,33 @@ class Camera2Controller(
         for (id in cameraManager.cameraIdList) {
             val chars = cameraManager.getCameraCharacteristics(id)
             if (chars.get(CameraCharacteristics.LENS_FACING) == currentFacing) {
-                cameraId = id; return
+                cameraId = id;
+                val id = cameraId ?: return
+                val chars = cameraManager.getCameraCharacteristics(id)
+                val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return
+
+                // Preview sizes (SurfaceTexture)
+                val previewSizes = map.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
+                Log.d(
+                    "duy.nguyen2",
+                    "Supported PREVIEW sizes: " + previewSizes.joinToString { "${it.width}x${it.height}" })
+
+                // JPEG sizes (ảnh chụp)
+                val jpegSizes = map.getOutputSizes(ImageFormat.JPEG) ?: emptyArray()
+                Log.d(
+                    "duy.nguyen2",
+                    "Supported JPEG sizes: " + jpegSizes.joinToString { "${it.width}x${it.height}" })
+
+                // Video sizes (MediaRecorder)
+                val videoSizes = map.getOutputSizes(MediaRecorder::class.java) ?: emptyArray()
+                Log.d(
+                    "duy.nguyen2",
+                    "Supported VIDEO sizes: " + videoSizes.joinToString { "${it.width}x${it.height}" })
+                return
             }
         }
+
+
         cameraId = cameraManager.cameraIdList.first()
     }
 }

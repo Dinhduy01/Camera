@@ -51,10 +51,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import com.duy.nguyen.camera.model.CameraViewModel.Aspect
 import com.duy.nguyen.camera.controller.Camera2Controller
 import com.duy.nguyen.camera.model.CameraUiState
 import com.duy.nguyen.camera.model.CameraViewModel
+import com.duy.nguyen.camera.model.CameraViewModel.Aspect
 import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
@@ -105,7 +105,7 @@ fun CameraScreen(vm: CameraViewModel) {
     val topOffsetTarget = when (ui.aspect) {
         Aspect.RATIO_16_9 -> 35.dp
         Aspect.RATIO_3_4 -> 150.dp
-        Aspect.RATIO_1_1 -> 0.dp
+        Aspect.RATIO_1_1 -> 200.dp
     }
 
     Box(
@@ -117,7 +117,7 @@ fun CameraScreen(vm: CameraViewModel) {
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(aspectAnim)
-                .align(if (ui.aspect == Aspect.RATIO_1_1) Alignment.Center else Alignment.TopCenter)
+                .align(Alignment.TopStart)
                 .offset(y = topOffsetTarget)
                 .then(if (!ui.isRecording) Modifier.pointerInput(Unit) {
                     var accV = 0f
@@ -151,7 +151,7 @@ fun CameraScreen(vm: CameraViewModel) {
                     .navigationBarsPadding()
                     .padding(bottom = 16.dp), horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                AspectSelector(current = ui.aspect, onSelect = vm::setAspect)
+                AspectSelector(current = ui.aspect, onSelect = vm::setAspect, ui)
                 Spacer(Modifier.height(10.dp))
 
                 LazyRow(
@@ -217,7 +217,14 @@ private fun CameraPreviewLayer(vm: CameraViewModel) {
 }
 
 @Composable
-private fun AspectSelector(current: Aspect, onSelect: (Aspect) -> Unit) {
+private fun AspectSelector(
+    current: Aspect, onSelect: (Aspect) -> Unit, ui: CameraUiState
+) {
+    val options = if (ui.mode == CameraUiState.Mode.VIDEO) {
+        listOf(Aspect.RATIO_16_9, Aspect.RATIO_1_1)
+    } else {
+        listOf(Aspect.RATIO_16_9, Aspect.RATIO_3_4, Aspect.RATIO_1_1)
+    }
     Row(
         Modifier
             .padding(horizontal = 20.dp)
@@ -226,9 +233,11 @@ private fun AspectSelector(current: Aspect, onSelect: (Aspect) -> Unit) {
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        listOf(Aspect.RATIO_16_9, Aspect.RATIO_3_4, Aspect.RATIO_1_1).forEach { asp ->
+        options.forEach { asp ->
             val selected = asp == current
-            val scale by animateFloatAsState(if (selected) 1.0f else 0.94f, tween(180), label = "")
+            val scale by animateFloatAsState(
+                if (selected) 1.0f else 0.94f, tween(180), label = ""
+            )
             Text(
                 asp.label,
                 color = if (selected) Color.White else Color(0xFFBDBDBD),
@@ -253,9 +262,15 @@ private fun CaptureRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
-        AssistButton(
-            text = if (ui.flashEnabled) "Flash On" else "Flash Off", onClick = onToggleFlash
-        )
+        if (!ui.isFront) {
+            AssistButton(
+                text = if (ui.flashEnabled) "Flash On" else "Flash Off",
+                onClick = onToggleFlash
+            )
+            Spacer(Modifier.width(28.dp))
+        } else {
+            Spacer(Modifier.width(28.dp))
+        }
         Spacer(Modifier.width(28.dp))
         ModeAwareCaptureButton(
             mode = ui.mode,

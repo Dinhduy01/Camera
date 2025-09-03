@@ -12,7 +12,7 @@ data class CameraUiState(
     val flashEnabled: Boolean = false,
     val isCapturing: Boolean = false,
     val isPreviewReady: Boolean = false,
-
+    val isFront: Boolean = false,
     val mode: Mode = Mode.PHOTO,
     val isRecording: Boolean = false,
 ) {
@@ -24,6 +24,9 @@ class CameraViewModel(
 ) : ViewModel() {
     private val _ui = MutableStateFlow(CameraUiState())
     val ui: StateFlow<CameraUiState> = _ui
+    private fun refreshFacing() {
+        _ui.value = _ui.value.copy(isFront = controller.isFrontCamera())
+    }
 
     fun setAspect(aspect: Aspect) {
         if (_ui.value.aspect == aspect) return
@@ -42,6 +45,11 @@ class CameraViewModel(
         _ui.value = _ui.value.copy(mode = mode)
         pauseCamera()
         controller.isRecord = mode == CameraUiState.Mode.VIDEO
+        if (controller.isRecord && controller.currentAspectPhoto == Aspect.RATIO_3_4) {
+            setAspect(controller.currentAspectVideo)
+        } else {
+            setAspect(controller.currentAspectPhoto)
+        }
         resumeCamera()
     }
 
@@ -49,12 +57,20 @@ class CameraViewModel(
         controller.startPreview(onReady = { ready ->
             _ui.value = _ui.value.copy(isPreviewReady = ready)
         })
+        refreshFacing()
     }
 
     fun pauseCamera() = viewModelScope.launch { controller.pause() }
-    fun resumeCamera() = viewModelScope.launch { controller.resume() }
+    fun resumeCamera() = viewModelScope.launch {
+        controller.resume()
+        refreshFacing()
+    }
     fun stopCamera() = viewModelScope.launch { controller.stop() }
-    fun switchCamera() = viewModelScope.launch { controller.switchCamera() }
+    fun switchCamera() = viewModelScope.launch {
+        controller.switchCamera()
+        refreshFacing()
+    }
+
 
     fun capture() = viewModelScope.launch {
         if (_ui.value.mode != CameraUiState.Mode.PHOTO) return@launch
