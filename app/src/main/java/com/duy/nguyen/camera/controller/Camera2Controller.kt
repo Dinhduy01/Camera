@@ -87,114 +87,8 @@ class Camera2Controller(
         }
     }
 
-    suspend fun startPreview(onReady: (Boolean) -> Unit) = withContext(Dispatchers.Default) {
-        if (cameraDevice != null && captureSession != null && previewSurface != null) {
-            resume(); onReady(true); return@withContext
-        }
-        if (previewSurface == null && textureView?.isAvailable == true) {
-            previewSurface = Surface(textureView!!.surfaceTexture)
-        }
-        if (previewSurface == null) {
-            onReady(false); return@withContext
-        }
-
-        startBackgroundThread()
-        chooseCamera()
-        val id = cameraId ?: return@withContext onReady(false)
-
-        if (!cameraOpenCloseLock.tryAcquire(
-                2500, TimeUnit.MILLISECONDS
-            )
-        ) return@withContext onReady(false)
-        try {
-            cameraManager.openCamera(id, object : CameraDevice.StateCallback() {
-                override fun onOpened(camera: CameraDevice) {
-                    cameraOpenCloseLock.release()
-                    cameraDevice = camera
-                    createPreviewSession(onReady)
-                }
-
-                override fun onDisconnected(camera: CameraDevice) {
-                    cameraOpenCloseLock.release(); camera.close(); cameraDevice = null; onReady(
-                        false
-                    )
-                }
-
-                override fun onError(camera: CameraDevice, error: Int) {
-                    cameraOpenCloseLock.release(); camera.close(); cameraDevice = null; onReady(
-                        false
-                    )
-                }
-            }, backgroundHandler)
-        } catch (_: SecurityException) {
-            cameraOpenCloseLock.release(); onReady(false)
-        }
-    }
-
-    private fun createPreviewSession(onReady: (Boolean) -> Unit) {
-        val device = cameraDevice ?: return onReady(false)
-        val surfaceTexture = textureView?.surfaceTexture ?: return onReady(false)
-
-        previewSize = if (isRecord) {
-            pickSizeFor(currentAspectVideo, true)
-        } else {
-            pickSizeFor(currentAspectPhoto, false)
-        }
-        surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
-        val surface = Surface(surfaceTexture)
-        previewSurface = surface
-
-        imageReader?.close()
-        Log.e("duy.nguyen2", "imageReader: $previewSize")
-        imageReader = ImageReader.newInstance(
-            previewSize.width, previewSize.height, ImageFormat.JPEG, 1
-        ).apply {
-            setOnImageAvailableListener({ reader ->
-                val image = reader.acquireNextImage() ?: return@setOnImageAvailableListener
-                try {
-                    saveJpegToAppDir(context, image)
-                } finally {
-                    image.close()
-                }
-            }, backgroundHandler)
-        }
-
-        try {
-            previewRequestBuilder =
-                device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                    addTarget(surface)
-                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-
-                    set(
-                        CaptureRequest.FLASH_MODE,
-                        if (isRecord && flashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
-                    )
-                }
-
-
-            val surfaces = listOf(surface, imageReader!!.surface)
-            device.createCaptureSession(
-                surfaces, object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        if (cameraDevice == null) return
-                        captureSession = session
-                        try {
-                            session.setRepeatingRequest(
-                                previewRequestBuilder!!.build(), null, backgroundHandler
-                            )
-                            onReady(true)
-                        } catch (_: Exception) {
-                            onReady(false)
-                        }
-                    }
-
-                    override fun onConfigureFailed(session: CameraCaptureSession) = onReady(false)
-                }, backgroundHandler
-            )
-        } catch (_: Exception) {
-            onReady(false)
-        }
+    suspend fun resume(): Unit = withContext(Dispatchers.Default) {
+        startPreview { _ -> }
     }
 
     suspend fun pause() = withContext(Dispatchers.Default) {
@@ -213,6 +107,21 @@ class Camera2Controller(
         }
         cameraDevice = null
         imageReader?.close(); imageReader = null
+    }
+
+    suspend fun stop() = withContext(Dispatchers.Default) {
+        try {
+            captureSession?.close()
+        } catch (_: Exception) {
+        }
+        captureSession = null
+        try {
+            cameraDevice?.close()
+        } catch (_: Exception) {
+        }
+        cameraDevice = null
+        imageReader?.close(); imageReader = null
+        stopBackgroundThread()
     }
 
     suspend fun switchCamera() = withContext(Dispatchers.Default) {
@@ -249,25 +158,6 @@ class Camera2Controller(
         }
     }
 
-    suspend fun resume(): Unit = withContext(Dispatchers.Default) {
-        startPreview { _ -> }
-    }
-
-    suspend fun stop() = withContext(Dispatchers.Default) {
-        try {
-            captureSession?.close()
-        } catch (_: Exception) {
-        }
-        captureSession = null
-        try {
-            cameraDevice?.close()
-        } catch (_: Exception) {
-        }
-        cameraDevice = null
-        imageReader?.close(); imageReader = null
-        stopBackgroundThread()
-    }
-
     suspend fun setFlash(enabled: Boolean) = withContext(Dispatchers.Default) {
         flashOn = enabled
         previewRequestBuilder?.apply {
@@ -275,10 +165,12 @@ class Camera2Controller(
                 CaptureRequest.FLASH_MODE,
                 if (isRecord && flashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
             )
-            try { captureSession?.setRepeatingRequest(build(), null, backgroundHandler) } catch (_: Throwable) {}
+            try {
+                captureSession?.setRepeatingRequest(build(), null, backgroundHandler)
+            } catch (_: Throwable) {
+            }
         }
     }
-
 
     suspend fun onAspectChanged(aspect: CameraViewModel.Aspect) = withContext(Dispatchers.Default) {
         if (isRecord) {
@@ -302,30 +194,8 @@ class Camera2Controller(
         }
     }
 
-    private fun pickSizeFor(
-        aspect: CameraViewModel.Aspect, forVideo: Boolean = false
-    ): Size {
-        return if (!forVideo) {
-            when (aspect) {
-                CameraViewModel.Aspect.RATIO_16_9 -> Size(4000, 2252)
-                CameraViewModel.Aspect.RATIO_3_4 -> Size(4000, 3000)
-                CameraViewModel.Aspect.RATIO_1_1 -> {
-                    return if (currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
-                        Size(2992, 2992)
-                    } else {
-                        Size(1088, 1088)
-                    }
-                }
-
-            }
-        } else {
-            when (aspect) {
-                CameraViewModel.Aspect.RATIO_16_9 -> Size(1920, 1080)
-                CameraViewModel.Aspect.RATIO_1_1 -> Size(2992, 2992)
-                CameraViewModel.Aspect.RATIO_3_4 -> Size(0, 0)
-            }
-        }
-    }
+    fun isFrontCamera(): Boolean =
+        currentFacing == CameraCharacteristics.LENS_FACING_FRONT
 
     suspend fun captureStill() = withContext(Dispatchers.Default) {
         val device = cameraDevice ?: return@withContext
@@ -335,7 +205,10 @@ class Camera2Controller(
             val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(jpegSurface)
                 set(CaptureRequest.JPEG_ORIENTATION, orientationDegrees())
-                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                set(
+                    CaptureRequest.CONTROL_AF_MODE,
+                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                )
 
                 if (flashOn) {
                     set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
@@ -345,16 +218,13 @@ class Camera2Controller(
                     set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
                 }
             }
-            Log.e("duy.nguyen2", "captureStill: "+flashOn )
+            Log.e("duy.nguyen2", "captureStill: " + flashOn)
             session.captureBurst(listOf<CaptureRequest>(builder.build()), null, backgroundHandler)
             previewRequestBuilder?.build()
                 ?.let { session.setRepeatingRequest(it, null, backgroundHandler) }
         } catch (_: Throwable) {
         }
     }
-
-    fun isFrontCamera(): Boolean =
-        currentFacing == CameraCharacteristics.LENS_FACING_FRONT
 
     suspend fun startRecording() = withContext(Dispatchers.Default) {
         val device = cameraDevice ?: throw IllegalStateException("Camera chưa mở")
@@ -421,12 +291,128 @@ class Camera2Controller(
         }
     }
 
+    suspend fun startPreview(onReady: (Boolean) -> Unit) = withContext(Dispatchers.Default) {
+        if (cameraDevice != null && captureSession != null && previewSurface != null) {
+            resume(); onReady(true); return@withContext
+        }
+        if (previewSurface == null && textureView?.isAvailable == true) {
+            previewSurface = Surface(textureView!!.surfaceTexture)
+        }
+        if (previewSurface == null) {
+            onReady(false); return@withContext
+        }
+
+        startBackgroundThread()
+        chooseCamera()
+        val id = cameraId ?: return@withContext onReady(false)
+
+        if (!cameraOpenCloseLock.tryAcquire(2500, TimeUnit.MILLISECONDS)) {
+            return@withContext onReady(false)
+        }
+        try {
+            cameraManager.openCamera(id, object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) {
+                    cameraOpenCloseLock.release()
+                    cameraDevice = camera
+                    createPreviewSession(onReady)
+                }
+
+                override fun onDisconnected(camera: CameraDevice) {
+                    cameraOpenCloseLock.release(); camera.close(); cameraDevice = null; onReady(
+                        false
+                    )
+                }
+
+                override fun onError(camera: CameraDevice, error: Int) {
+                    cameraOpenCloseLock.release(); camera.close(); cameraDevice = null; onReady(
+                        false
+                    )
+                }
+            }, backgroundHandler)
+        } catch (_: SecurityException) {
+            cameraOpenCloseLock.release(); onReady(false)
+        }
+    }
+
+    private fun createPreviewSession(onReady: (Boolean) -> Unit) {
+        val device = cameraDevice ?: return onReady(false)
+        val surfaceTexture = textureView?.surfaceTexture ?: return onReady(false)
+
+        previewSize = if (isRecord) {
+            pickSizeFor(currentAspectVideo, true)
+        } else {
+            pickSizeFor(currentAspectPhoto, false)
+        }
+        surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
+        val surface = Surface(surfaceTexture)
+        previewSurface = surface
+
+        imageReader?.close()
+        Log.e("duy.nguyen2", "imageReader: $previewSize")
+        imageReader = ImageReader.newInstance(
+            previewSize.width, previewSize.height, ImageFormat.JPEG, 1
+        ).apply {
+            setOnImageAvailableListener({ reader ->
+                val image = reader.acquireNextImage() ?: return@setOnImageAvailableListener
+                try {
+                    saveJpegToAppDir(context, image)
+                } finally {
+                    image.close()
+                }
+            }, backgroundHandler)
+        }
+
+        try {
+            previewRequestBuilder =
+                device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                    addTarget(surface)
+                    set(
+                        CaptureRequest.CONTROL_AF_MODE,
+                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                    )
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                    set(
+                        CaptureRequest.FLASH_MODE,
+                        if (isRecord && flashOn) CaptureRequest.FLASH_MODE_TORCH
+                        else CaptureRequest.FLASH_MODE_OFF
+                    )
+                }
+
+            val surfaces = listOf(surface, imageReader!!.surface)
+            device.createCaptureSession(
+                surfaces,
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        if (cameraDevice == null) return
+                        captureSession = session
+                        try {
+                            session.setRepeatingRequest(
+                                previewRequestBuilder!!.build(), null, backgroundHandler
+                            )
+                            onReady(true)
+                        } catch (_: Exception) {
+                            onReady(false)
+                        }
+                    }
+
+                    override fun onConfigureFailed(session: CameraCaptureSession) = onReady(false)
+                },
+                backgroundHandler
+            )
+        } catch (_: Exception) {
+            onReady(false)
+        }
+    }
+
     private suspend fun recreateSession(
-        device: CameraDevice, surfaces: List<Surface>, configure: (CaptureRequest.Builder) -> Unit
+        device: CameraDevice,
+        surfaces: List<Surface>,
+        configure: (CaptureRequest.Builder) -> Unit
     ) = suspendCancellableCoroutine<Unit> { cont ->
         try {
             device.createCaptureSession(
-                surfaces, object : CameraCaptureSession.StateCallback() {
+                surfaces,
+                object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         captureSession = session
                         val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
@@ -439,10 +425,35 @@ class Camera2Controller(
                     override fun onConfigureFailed(session: CameraCaptureSession) {
                         cont.resume(Unit)
                     }
-                }, backgroundHandler
+                },
+                backgroundHandler
             )
         } catch (_: Exception) {
             cont.resume(Unit)
+        }
+    }
+
+    private fun pickSizeFor(
+        aspect: CameraViewModel.Aspect, forVideo: Boolean = false
+    ): Size {
+        return if (!forVideo) {
+            when (aspect) {
+                CameraViewModel.Aspect.RATIO_16_9 -> Size(4000, 2252)
+                CameraViewModel.Aspect.RATIO_3_4 -> Size(4000, 3000)
+                CameraViewModel.Aspect.RATIO_1_1 -> {
+                    return if (currentFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                        Size(2992, 2992)
+                    } else {
+                        Size(1088, 1088)
+                    }
+                }
+            }
+        } else {
+            when (aspect) {
+                CameraViewModel.Aspect.RATIO_16_9 -> Size(1920, 1080)
+                CameraViewModel.Aspect.RATIO_1_1 -> Size(2992, 2992)
+                CameraViewModel.Aspect.RATIO_3_4 -> Size(0, 0)
+            }
         }
     }
 
@@ -471,7 +482,6 @@ class Camera2Controller(
         }
     }
 
-
     private fun startBackgroundThread() {
         if (backgroundThread != null) return
         backgroundThread = HandlerThread("CameraBackground").also { it.start() }
@@ -491,10 +501,11 @@ class Camera2Controller(
         for (id in cameraManager.cameraIdList) {
             val chars = cameraManager.getCameraCharacteristics(id)
             if (chars.get(CameraCharacteristics.LENS_FACING) == currentFacing) {
-                cameraId = id;
-                val id = cameraId ?: return
-                val chars = cameraManager.getCameraCharacteristics(id)
-                val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return
+                cameraId = id
+                val selectedId = cameraId ?: return
+                val selectedChars = cameraManager.getCameraCharacteristics(selectedId)
+                val map = selectedChars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    ?: return
 
                 // Preview sizes (SurfaceTexture)
                 val previewSizes = map.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
@@ -516,7 +527,6 @@ class Camera2Controller(
                 return
             }
         }
-
 
         cameraId = cameraManager.cameraIdList.first()
     }
