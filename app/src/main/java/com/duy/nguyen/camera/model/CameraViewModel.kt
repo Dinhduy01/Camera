@@ -1,11 +1,14 @@
 package com.duy.nguyen.camera.model
 
+import android.content.Context
+import android.view.TextureView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.duy.nguyen.camera.controller.Camera2Controller
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import android.hardware.camera2.CameraManager
 
 data class CameraUiState(
     val aspect: CameraViewModel.Aspect = CameraViewModel.Aspect.RATIO_3_4,
@@ -22,8 +25,19 @@ data class CameraUiState(
 class CameraViewModel(
     private val controller: Camera2Controller
 ) : ViewModel() {
+
+    companion object {
+        fun from(context: Context, cm: CameraManager): CameraViewModel {
+            return CameraViewModel(Camera2Controller(context, cm))
+        }
+    }
+
     private val _ui = MutableStateFlow(CameraUiState())
     val ui: StateFlow<CameraUiState> = _ui
+
+    fun attachPreview(view: TextureView) = controller.attachPreview(view)
+    fun getPreviewBufferSize() = controller.getPreviewBufferSize()
+
     private fun refreshFacing() {
         _ui.value = _ui.value.copy(isFront = controller.isFrontCamera())
     }
@@ -31,7 +45,11 @@ class CameraViewModel(
     fun setAspect(aspect: Aspect) {
         if (_ui.value.aspect == aspect) return
         _ui.value = _ui.value.copy(aspect = aspect)
-        viewModelScope.launch { controller.onAspectChanged(aspect) }
+        viewModelScope.launch {
+            controller.restartPreviewWithAspect(aspect) { ready ->
+                _ui.value = _ui.value.copy(isPreviewReady = ready)
+            }
+        }
     }
 
     fun toggleFlash() {
@@ -45,12 +63,17 @@ class CameraViewModel(
         _ui.value = _ui.value.copy(mode = mode)
         pauseCamera()
         controller.isRecord = mode == CameraUiState.Mode.VIDEO
+        var aspect: Aspect;
         if (controller.isRecord && controller.currentAspectPhoto == Aspect.RATIO_3_4) {
-            setAspect(controller.currentAspectVideo)
+             aspect = controller.currentAspectVideo
         } else {
-            setAspect(controller.currentAspectPhoto)
+            aspect =controller.currentAspectPhoto
         }
-        resumeCamera()
+        viewModelScope.launch {
+            controller.restartPreviewWithAspect(aspect) { ready ->
+                _ui.value = _ui.value.copy(isPreviewReady = ready)
+            }
+        }
     }
 
     fun startPreviewIfNeeded() = viewModelScope.launch {
@@ -71,13 +94,10 @@ class CameraViewModel(
         refreshFacing()
     }
 
-
     fun capture() = viewModelScope.launch {
         if (_ui.value.mode != CameraUiState.Mode.PHOTO) return@launch
         _ui.value = _ui.value.copy(isCapturing = true)
-        try {
-            controller.captureStill()
-        } finally {
+        try { controller.captureStill() } finally {
             _ui.value = _ui.value.copy(isCapturing = false)
         }
     }
@@ -94,6 +114,8 @@ class CameraViewModel(
     }
 
     enum class Aspect(val w: Int, val h: Int, val label: String) {
-        RATIO_16_9(16, 9, "16:9"), RATIO_3_4(3, 4, "3:4"), RATIO_1_1(1, 1, "1:1");
+        RATIO_16_9(16, 9, "16:9"),
+        RATIO_3_4(3, 4, "3:4"),
+        RATIO_1_1(1, 1, "1:1");
     }
 }
