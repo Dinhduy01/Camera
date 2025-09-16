@@ -102,6 +102,11 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         vm.resumeCamera()
     }
+
+    override fun onStop() {
+        super.onStop()
+        vm.stopCamera()
+    }
 }
 
 @Composable
