@@ -25,14 +25,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.FlashOff
+import androidx.compose.material.icons.rounded.FlashOn
+import androidx.compose.material.icons.rounded.FlipCameraAndroid
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -49,7 +54,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -61,7 +65,6 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import com.duy.nguyen.camera.model.CameraUiState
 import com.duy.nguyen.camera.model.CameraViewModel
 import com.duy.nguyen.camera.model.CameraViewModel.Aspect
-import androidx.compose.ui.geometry.Size as CSize
 
 class MainActivity : ComponentActivity() {
 
@@ -112,21 +115,27 @@ fun CameraScreen(vm: CameraViewModel) {
             Aspect.RATIO_1_1 -> 1f
         }, animationSpec = tween(260, easing = FastOutSlowInEasing), label = "frameAspect"
     )
-
+    val previewOffsetY = if (ui.aspect == Aspect.RATIO_16_9) (-30).dp else 0.dp
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
         CameraPreviewInFrame(
-            vm = vm, frameAspect = frameAspect, modifier = Modifier.align(Alignment.Center)
+            vm = vm,
+            frameAspect = frameAspect,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset(y = previewOffsetY)
         )
-
         AspectMaskAroundFrame(
-            aspect = frameAspect, showGrid = true, modifier = Modifier.fillMaxSize()
+            aspect = frameAspect,
+            showGrid = true,
+            modifier = Modifier
+                .fillMaxSize()
+                .offset(y = previewOffsetY)
         )
 
-        // Controls
         if (!ui.isRecording) {
             Column(
                 Modifier
@@ -159,7 +168,7 @@ fun CameraScreen(vm: CameraViewModel) {
                 }
 
                 Spacer(Modifier.height(10.dp))
-                CaptureRow(
+                BottomBarIcons(
                     ui = ui,
                     onToggleFlash = vm::toggleFlash,
                     onCapture = vm::capture,
@@ -191,7 +200,7 @@ fun CameraScreen(vm: CameraViewModel) {
 private fun CameraPreviewInFrame(
     vm: CameraViewModel,
     frameAspect: Float,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val ctx = LocalContext.current
     var tvRef by remember { mutableStateOf<TextureView?>(null) }
@@ -341,7 +350,7 @@ private fun AspectMaskAroundFrame(
             }
 
         val left = (w - frameW) / 2f
-        val top  = (h - frameH) / 2f
+        val top = (h - frameH) / 2f
 
         val line = Color.White.copy(alpha = 0.55f)
         val lw = 1.dp.toPx()
@@ -351,10 +360,10 @@ private fun AspectMaskAroundFrame(
         val y1 = top + frameH / 3f
         val y2 = top + frameH * 2f / 3f
 
-        drawLine(line, Offset(x1, top),            Offset(x1, top + frameH), strokeWidth = lw)
-        drawLine(line, Offset(x2, top),            Offset(x2, top + frameH), strokeWidth = lw)
-        drawLine(line, Offset(left, y1),           Offset(left + frameW, y1), strokeWidth = lw)
-        drawLine(line, Offset(left, y2),           Offset(left + frameW, y2), strokeWidth = lw)
+        drawLine(line, Offset(x1, top), Offset(x1, top + frameH), strokeWidth = lw)
+        drawLine(line, Offset(x2, top), Offset(x2, top + frameH), strokeWidth = lw)
+        drawLine(line, Offset(left, y1), Offset(left + frameW, y1), strokeWidth = lw)
+        drawLine(line, Offset(left, y2), Offset(left + frameW, y2), strokeWidth = lw)
     }
 }
 
@@ -392,7 +401,7 @@ private fun AspectSelector(
 }
 
 @Composable
-private fun CaptureRow(
+private fun BottomBarIcons(
     ui: CameraUiState,
     onToggleFlash: () -> Unit,
     onCapture: () -> Unit,
@@ -402,49 +411,78 @@ private fun CaptureRow(
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
+        horizontalArrangement = Arrangement.SpaceEvenly
     ) {
-        if (!ui.isFront) {
-            AssistButton(
-                text = if (ui.flashEnabled) "Flash On" else "Flash Off", onClick = onToggleFlash
+        // Flash (ẩn ở cam trước nếu bạn muốn)
+        RoundIconButton(
+            selected = ui.flashEnabled && !ui.isRecording,
+            onClick = onToggleFlash,
+            enabled = !ui.isRecording && !ui.isFront // tắt khi quay & khi cam trước
+        ) {
+            Icon(
+                imageVector = if (ui.flashEnabled) Icons.Rounded.FlashOn else Icons.Rounded.FlashOff,
+                contentDescription = "Flash",
+                tint = Color.White
             )
-            Spacer(Modifier.width(28.dp))
-        } else {
-            Spacer(Modifier.width(28.dp))
         }
-        Spacer(Modifier.width(28.dp))
-        ModeAwareCaptureButton(
+
+        // Capture / Record
+        CaptureCenterButton(
             mode = ui.mode,
             isRecording = ui.isRecording,
             onCapture = onCapture,
             onToggleRecord = onToggleRecord
         )
-        Spacer(Modifier.width(28.dp))
-        AssistButton(text = "Flip", onClick = onFlip)
+
+        // Flip camera
+        RoundIconButton(
+            onClick = onFlip,
+            enabled = !ui.isRecording
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.FlipCameraAndroid,
+                contentDescription = "Switch camera",
+                tint = Color.White
+            )
+        }
     }
 }
 
 @Composable
-private fun AssistButton(text: String, onClick: () -> Unit) {
-    Surface(shape = CircleShape, color = Color(0x22FFFFFF)) {
-        Text(
-            text = text,
-            color = Color.White,
-            modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 10.dp)
-                .clickable { onClick() })
+private fun RoundIconButton(
+    selected: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val bg = when {
+        !enabled -> Color(0x22FFFFFF)
+        selected -> Color(0x33FFFFFF)
+        else -> Color(0x1FFFFFFF)
+    }
+    Surface(
+        shape = CircleShape,
+        color = bg,
+        modifier = Modifier
+            .size(52.dp)
+            .clip(CircleShape)
+            .clickable(enabled = enabled) { onClick() }
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            content()
+        }
     }
 }
 
 @Composable
-private fun ModeAwareCaptureButton(
+private fun CaptureCenterButton(
     mode: CameraUiState.Mode,
     isRecording: Boolean,
     onCapture: () -> Unit,
     onToggleRecord: () -> Unit
 ) {
-    val size = 76.dp
-    val stroke = 5.dp
+    val size = 80.dp
+    val border = 5.dp
 
     when (mode) {
         CameraUiState.Mode.PHOTO -> {
@@ -453,8 +491,9 @@ private fun ModeAwareCaptureButton(
                     .size(size)
                     .clip(CircleShape)
                     .background(Color.White)
-                    .border(stroke, Color(0x33000000), CircleShape)
-                    .clickable { onCapture() })
+                    .border(border, Color(0x33000000), CircleShape)
+                    .clickable { onCapture() }
+            )
         }
 
         CameraUiState.Mode.VIDEO -> {
@@ -464,15 +503,17 @@ private fun ModeAwareCaptureButton(
                         .size(size)
                         .clip(CircleShape)
                         .background(Color.Red)
-                        .clickable { onToggleRecord() })
+                        .clickable { onToggleRecord() }
+                )
             } else {
                 Box(
                     modifier = Modifier
                         .size(size)
                         .clip(CircleShape)
                         .background(Color.Red)
-                        .border(stroke, Color.White, CircleShape)
-                        .clickable { onToggleRecord() })
+                        .border(border, Color.White, CircleShape)
+                        .clickable { onToggleRecord() }
+                )
             }
         }
     }

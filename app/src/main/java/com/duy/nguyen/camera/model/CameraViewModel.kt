@@ -18,6 +18,7 @@ data class CameraUiState(
     val isFront: Boolean = false,
     val mode: Mode = Mode.PHOTO,
     val isRecording: Boolean = false,
+    val isChangingAspect: Boolean = false
 ) {
     enum class Mode { PHOTO, VIDEO }
 }
@@ -43,15 +44,15 @@ class CameraViewModel(
     }
 
     fun setAspect(aspect: Aspect) {
-        if (_ui.value.aspect == aspect) return
-        _ui.value = _ui.value.copy(aspect = aspect)
+        val cur = _ui.value
+        if (cur.aspect == aspect || cur.isChangingAspect) return
+        _ui.value = cur.copy(aspect = aspect, isChangingAspect = true)
         viewModelScope.launch {
             controller.restartPreviewWithAspect(aspect) { ready ->
-                _ui.value = _ui.value.copy(isPreviewReady = ready)
+                _ui.value = _ui.value.copy(isPreviewReady = ready, isChangingAspect = false)
             }
         }
     }
-
     fun toggleFlash() {
         val next = !_ui.value.flashEnabled
         _ui.value = _ui.value.copy(flashEnabled = next)
@@ -59,21 +60,17 @@ class CameraViewModel(
     }
 
     fun setMode(mode: CameraUiState.Mode) {
-        if (_ui.value.mode == mode) return
-        _ui.value = _ui.value.copy(mode = mode)
+        val cur = _ui.value
+        if (cur.mode == mode || cur.isChangingAspect) return
+        _ui.value = cur.copy(mode = mode)
         pauseCamera()
         controller.isRecord = mode == CameraUiState.Mode.VIDEO
-        var aspect: Aspect;
         if (controller.isRecord && controller.currentAspectPhoto == Aspect.RATIO_3_4) {
-             aspect = controller.currentAspectVideo
+            setAspect(controller.currentAspectVideo)
         } else {
-            aspect =controller.currentAspectPhoto
+            setAspect(controller.currentAspectPhoto)
         }
-        viewModelScope.launch {
-            controller.restartPreviewWithAspect(aspect) { ready ->
-                _ui.value = _ui.value.copy(isPreviewReady = ready)
-            }
-        }
+        resumeCamera()
     }
 
     fun startPreviewIfNeeded() = viewModelScope.launch {
